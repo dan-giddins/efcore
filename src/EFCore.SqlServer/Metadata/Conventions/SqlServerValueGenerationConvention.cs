@@ -1,6 +1,7 @@
 // Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
+using System;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Microsoft.EntityFrameworkCore.Metadata.Conventions.Infrastructure;
 using Microsoft.EntityFrameworkCore.SqlServer.Metadata.Internal;
@@ -50,7 +51,57 @@ namespace Microsoft.EntityFrameworkCore.Metadata.Conventions
                 return;
             }
 
+            // special case value generation changes for period start/end columns
+            // we want to keep them as ValueGenerated.OnAddOrUpdate (which we set during ProcessEntityTypeAnnotationChanged)
+            // and we don't want to get this changed to ValueGenerated.OnAdd when the default value is set
+            if (name == RelationalAnnotationNames.DefaultValue
+                && propertyBuilder.Metadata.DeclaringEntityType is IConventionEntityType entityType
+                && entityType.IsTemporal()
+                && (entityType.TemporalPeriodStartPropertyName() == propertyBuilder.Metadata.Name
+                    || entityType.TemporalPeriodEndPropertyName() == propertyBuilder.Metadata.Name))
+            {
+                return;
+            }
+
             base.ProcessPropertyAnnotationChanged(propertyBuilder, name, annotation, oldAnnotation, context);
+        }
+
+        /// <summary>
+        ///     Called after an annotation is changed on an entity.
+        /// </summary>
+        /// <param name="entityTypeBuilder"> The builder for the entity type. </param>
+        /// <param name="name"> The annotation name. </param>
+        /// <param name="annotation"> The new annotation. </param>
+        /// <param name="oldAnnotation"> The old annotation.  </param>
+        /// <param name="context"> Additional information associated with convention execution. </param>
+        public override void ProcessEntityTypeAnnotationChanged(
+            IConventionEntityTypeBuilder entityTypeBuilder,
+            string name,
+            IConventionAnnotation? annotation,
+            IConventionAnnotation? oldAnnotation,
+            IConventionContext<IConventionAnnotation> context)
+        {
+            if ((name == SqlServerAnnotationNames.TemporalPeriodStartPropertyName
+                    || name == SqlServerAnnotationNames.TemporalPeriodEndPropertyName)
+                && annotation?.Value is string propertyName
+                && propertyName != null)
+            {
+                // TODO: this seems out of place here - ideally temporal convention would be creating those properties
+                // so we should just be able to use entityTypeBuilder.Metadata.GetProperty(...)
+                // but this convention runs earlier (should it?), so the temporal convention didn't have a chance to create them yet
+                var periodPropertyBuilder = entityTypeBuilder.Property(
+                    typeof(DateTime),
+                    propertyName);
+
+                if (periodPropertyBuilder != null)
+                {
+                    // TODO: this doesn't do anything?
+                    //periodPropertyBuilder.ValueGenerated(GetValueGenerated(periodPropertyBuilder.Metadata));
+                    periodPropertyBuilder.ValueGenerated(ValueGenerated.OnAddOrUpdate);
+                }
+            }
+
+            base.ProcessEntityTypeAnnotationChanged(entityTypeBuilder, name, annotation, oldAnnotation, context);
         }
 
         /// <summary>
